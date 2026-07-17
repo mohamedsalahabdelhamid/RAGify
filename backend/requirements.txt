@@ -1,0 +1,30 @@
+# ── Core API framework ────────────────────────────────────────────────────────
+fastapi
+uvicorn[standard]
+pydantic
+python-dotenv
+python-multipart
+
+# ── LangChain core + document loaders ────────────────────────────────────────
+langchain
+langchain-core
+langchain-community
+
+# ── LLM providers (free-tier fallback chain) ──────────────────────────────────
+langchain-google-genai       # Google Gemini (Flash + Pro)
+langchain-groq               # Groq (Llama 3.1 70B / 8B, Mixtral, Gemma2)
+
+# ── Vector database ────────────────────────────────────────────────────────────────────
+pinecone                     # official Pinecone SDK (replaces deprecated pinecone-client)
+
+# ── Embeddings (runs locally, no API key needed) ─────────────────────────────
+sentence-transformers
+
+# ── Document parsers ──────────────────────────────────────────────────────────
+pypdf                        # PDF files
+docx2txt                     # DOCX (Word) files
+
+# ── Data analysis ─────────────────────────────────────────────────────────────
+pandas
+openpyxl                     # .xlsx files
+xlrd                         # .xls legacy files  (xlrd >= 2.0 supports xls only)
