@@ -1,0 +1,9 @@
+@echo off
+echo Starting FastAPI Backend...
+start cmd /k "cd backend && python -m uvicorn main:app --reload --port 9999"
+
+echo Waiting 5 seconds before starting Localtunnel...
+timeout /t 5
+
+echo Starting Localtunnel on port 9999...
+start cmd /k "npx localtunnel --port 9999"

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Bar } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
@@ -26,14 +26,13 @@ interface AnalysisData {
 }
 
 export default function AnalyticsDashboard() {
-  const [analysis, setAnalysis] = useState<AnalysisData | null>(null);
-
-  useEffect(() => {
-    const data = localStorage.getItem('excel_analysis');
-    if (data) {
-      setAnalysis(JSON.parse(data));
+  const [analysis] = useState<AnalysisData | null>(() => {
+    if (typeof window !== 'undefined') {
+      const data = localStorage.getItem('excel_analysis');
+      return data ? JSON.parse(data) : null;
     }
-  }, []);
+    return null;
+  });
 
   const handleDownload = () => {
     window.print();

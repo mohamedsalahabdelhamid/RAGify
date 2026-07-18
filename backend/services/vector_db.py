@@ -1,6 +1,5 @@
-from pinecone import Pinecone, ServerlessSpec
+from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from uuid import uuid4
 import os
 import logging
 
@@ -8,69 +7,57 @@ logger = logging.getLogger(__name__)
 
 class VectorDBManager:
     def __init__(self):
-        self.pc = None
-        self.index = None
+        self.db_path = os.path.join(os.path.dirname(__file__), "..", "vectorstore", "db_faiss")
         # Using a free HuggingFace model for embeddings (no API key needed, runs locally in the backend)
         self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-
-        pinecone_key = os.getenv("PINECONE_API_KEY")
-        if pinecone_key and pinecone_key != "your_pinecone_key_here":
-            try:
-                self.pc = Pinecone(api_key=pinecone_key)
-                index_name = os.getenv("PINECONE_INDEX_NAME", "rag-index")
-
-                if index_name not in [i.name for i in self.pc.list_indexes()]:
-                    logger.info(f"Creating Pinecone index: {index_name}")
-                    self.pc.create_index(
-                        name=index_name,
-                        dimension=384,  # matches all-MiniLM-L6-v2 output dimension
-                        metric="cosine",
-                        spec=ServerlessSpec(
-                            cloud="aws",
-                            region="us-east-1"
-                        )
-                    )
-                self.index = self.pc.Index(index_name)
-                logger.info("Pinecone VectorDB initialized successfully.")
-            except Exception as e:
-                logger.error(f"Failed to initialize Pinecone: {e}")
+        logger.info("Local FAISS VectorDB manager initialized.")
 
     def add_chunks(self, chunks, filename: str = "unknown", namespace: str = "default"):
-        if not self.index:
-            logger.warning("Vector DB not initialized. Check PINECONE_API_KEY.")
+        if not chunks:
             return
 
-        vectors = []
-        for i, chunk in enumerate(chunks):
-            embedding = self.embeddings.embed_query(chunk.page_content)
-            # FIX #2: Use a unique ID per chunk combining filename + uuid to prevent
-            # overwriting chunks from previously uploaded files on subsequent uploads.
-            unique_id = f"{filename}_{uuid4().hex}_{i}"
-            vectors.append({
-                "id": unique_id,
-                "values": embedding,
-                "metadata": {"text": chunk.page_content, "source": filename, **chunk.metadata}
-            })
-
-        # Upsert in batches of 100 to respect Pinecone API limits
-        batch_size = 100
-        for batch_start in range(0, len(vectors), batch_size):
-            batch = vectors[batch_start: batch_start + batch_size]
-            self.index.upsert(vectors=batch, namespace=namespace)
-        logger.info(f"Added {len(vectors)} chunks from '{filename}' to Pinecone.")
+        logger.info(f"Adding {len(chunks)} chunks from '{filename}' to local FAISS DB...")
+        
+        # Ensure the directory exists
+        os.makedirs(self.db_path, exist_ok=True)
+        
+        # Create a temporary FAISS index from the new chunks
+        new_db = FAISS.from_documents(chunks, self.embeddings)
+        
+        # Check if the DB already exists locally
+        if os.path.exists(os.path.join(self.db_path, "index.faiss")):
+            logger.info("Existing FAISS DB found. Merging...")
+            existing_db = FAISS.load_local(self.db_path, self.embeddings, allow_dangerous_deserialization=True)
+            existing_db.merge_from(new_db)
+            existing_db.save_local(self.db_path)
+        else:
+            logger.info("No existing FAISS DB found. Creating a new one...")
+            new_db.save_local(self.db_path)
+            
+        logger.info(f"Successfully saved {len(chunks)} chunks to FAISS.")
 
     def query(self, query_text: str, top_k: int = 5, namespace: str = "default"):
-        if not self.index:
-            logger.warning("Vector DB not initialized. Check PINECONE_API_KEY.")
+        if not os.path.exists(os.path.join(self.db_path, "index.faiss")):
+            logger.warning("Local FAISS DB not found. No documents have been indexed yet.")
             return None
 
-        query_embedding = self.embeddings.embed_query(query_text)
-        results = self.index.query(
-            vector=query_embedding,
-            top_k=top_k,
-            include_metadata=True,
-            namespace=namespace
-        )
-        return results
+        try:
+            db = FAISS.load_local(self.db_path, self.embeddings, allow_dangerous_deserialization=True)
+            docs = db.similarity_search(query_text, k=top_k)
+            
+            # Format the results to match the expected format in main.py
+            # main.py expects: results["matches"] -> list of dicts with "metadata" dict containing "text"
+            matches = []
+            for doc in docs:
+                matches.append({
+                    "metadata": {
+                        "text": doc.page_content,
+                        **doc.metadata
+                    }
+                })
+            return {"matches": matches}
+        except Exception as e:
+            logger.error(f"Error querying FAISS DB: {e}")
+            return None
 
 vector_db = VectorDBManager()

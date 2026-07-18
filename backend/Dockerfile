@@ -1,32 +1,34 @@
-# Use a lightweight Python image
+# 1. استخدام نسخة بايثون خفيفة ومستقرة
 FROM python:3.11-slim
 
-# Prevent Python from creating .pyc files
+# 2. منع بايثون من إنشاء ملفات مؤقتة وتسريع الطباعة في الـ Logs
 ENV PYTHONDONTWRITEBYTECODE=1
-
-# Ensure logs are printed immediately
 ENV PYTHONUNBUFFERED=1
 
-# Working directory
-WORKDIR /app
-
-# Install system packages if needed
+# 3. تثبيت حزم النظام المطلوبة للمكتبات الثقيلة
 RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first (for Docker cache)
-COPY requirements.txt .
+# 4. إعداد مستخدم عادي بصلاحيات محدودة (شرط أساسي في Hugging Face)
+RUN useradd -m -u 1000 user
+USER user
+ENV HOME=/home/user \
+    PATH=/home/user/.local/bin:$PATH
 
-# Install Python dependencies
+# 5. تحديد مجلد العمل داخل حساب المستخدم
+WORKDIR $HOME/app
+
+# 6. نسخ ملف المكتبات وتثبيتها
+COPY --chown=user requirements.txt .
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy project files
-COPY . .
+# 7. نسخ باقي ملفات المشروع
+COPY --chown=user . .
 
-# Default port
-EXPOSE 8000
+# 8. البورت الافتراضي لـ Hugging Face
+EXPOSE 7860
 
-# Start FastAPI
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# 9. تشغيل FastAPI على بورت 7860 تلقائياً
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
