@@ -155,7 +155,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 export function useAppContext() {
   const context = useContext(AppContext);
   if (!context) {
-    throw new Error('useAppContext must be used within an AppProvider');
+    // Return a safe fallback object during prerendering if context is undefined
+    return {
+      theme: 'dark' as Theme,
+      toggleTheme: () => {},
+      language: 'en' as Language,
+      toggleLanguage: () => {},
+      t: (key: string) => key
+    };
   }
   return context;
 }
