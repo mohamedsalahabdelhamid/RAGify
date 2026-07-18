@@ -11,7 +11,8 @@ import {
   Legend,
 } from 'chart.js';
 import Link from 'next/link';
-import { ArrowLeft, Download } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Download } from 'lucide-react';
+import { useAppContext } from '@/context/AppContext';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
 
@@ -26,6 +27,8 @@ interface AnalysisData {
 }
 
 export default function AnalyticsDashboard() {
+  const { t, theme, language } = useAppContext();
+
   const [analysis] = useState<AnalysisData | null>(() => {
     if (typeof window !== 'undefined') {
       const data = localStorage.getItem('excel_analysis');
@@ -40,19 +43,19 @@ export default function AnalyticsDashboard() {
 
   if (!analysis) {
     return (
-      <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center gap-4">
-        <p className="text-xl">No analysis data found. Please upload an Excel file first.</p>
-        <Link href="/dashboard" className="text-indigo-400 hover:underline">
-          Return to Dashboard
+      <div className="min-h-screen bg-gray-50 dark:bg-slate-950 text-slate-900 dark:text-white flex flex-col items-center justify-center gap-4 transition-colors duration-300">
+        <p className="text-xl">{t('noData')}</p>
+        <Link href="/dashboard" className="text-indigo-600 dark:text-indigo-400 hover:underline">
+          {t('returnDashboard')}
         </Link>
       </div>
     );
   }
 
+  const isDark = theme === 'dark';
+
   return (
     <>
-      {/* FIX #8: Use a regular <style> tag instead of <style jsx global> which
-          is not supported in the Next.js App Router without styled-jsx. */}
       <style>{`
         @media print {
           body { background: white !important; color: black !important; }
@@ -63,49 +66,49 @@ export default function AnalyticsDashboard() {
         }
       `}</style>
 
-      <div className="min-h-screen bg-slate-950 text-white p-6 print-bg">
+      <div className="min-h-screen bg-gray-50 dark:bg-slate-950 text-slate-900 dark:text-white p-6 print-bg transition-colors duration-300">
         <div className="max-w-6xl mx-auto">
           <div className="flex justify-between items-center mb-8">
             <div className="flex items-center gap-4">
               <Link
                 href="/dashboard"
-                className="p-2 hover:bg-white/10 rounded-full transition-colors print:hidden"
+                className="p-2 bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 hover:bg-gray-100 dark:hover:bg-white/10 rounded-full transition-colors print:hidden"
               >
-                <ArrowLeft />
+                {language === 'ar' ? <ArrowRight /> : <ArrowLeft />}
               </Link>
-              <h1 className="text-3xl font-bold print-text">Analytics Dashboard</h1>
+              <h1 className="text-3xl font-bold print-text">{t('analyticsDashboard')}</h1>
             </div>
             <button
               onClick={handleDownload}
-              className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 px-6 py-2 rounded-xl transition-colors font-bold print:hidden"
+              className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-xl transition-colors font-bold print:hidden"
             >
               <Download className="w-5 h-5" />
-              Download Report
+              {t('downloadReport')}
             </button>
           </div>
 
           {/* Stats Cards */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-            <div className="bg-white/5 border border-white/10 rounded-2xl p-6 shadow-xl print-card print-border">
-              <h3 className="text-gray-400 text-sm mb-2 print-text">Total Rows</h3>
-              <p className="text-4xl font-bold text-indigo-400">{analysis.summary.rows_count}</p>
+            <div className="bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-2xl p-6 shadow-sm dark:shadow-xl print-card print-border">
+              <h3 className="text-gray-500 dark:text-gray-400 text-sm mb-2 print-text">{t('totalRows')}</h3>
+              <p className="text-4xl font-bold text-indigo-600 dark:text-indigo-400">{analysis.summary.rows_count}</p>
             </div>
-            <div className="bg-white/5 border border-white/10 rounded-2xl p-6 shadow-xl print-card print-border">
-              <h3 className="text-gray-400 text-sm mb-2 print-text">Total Columns</h3>
-              <p className="text-4xl font-bold text-purple-400">{analysis.summary.columns.length}</p>
+            <div className="bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-2xl p-6 shadow-sm dark:shadow-xl print-card print-border">
+              <h3 className="text-gray-500 dark:text-gray-400 text-sm mb-2 print-text">{t('totalColumns')}</h3>
+              <p className="text-4xl font-bold text-purple-600 dark:text-purple-400">{analysis.summary.columns.length}</p>
             </div>
-            <div className="bg-white/5 border border-white/10 rounded-2xl p-6 shadow-xl print-card print-border">
-              <h3 className="text-gray-400 text-sm mb-2 print-text">AI Insights</h3>
-              <p className="text-base font-medium text-pink-400">{analysis.insights}</p>
+            <div className="bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-2xl p-6 shadow-sm dark:shadow-xl print-card print-border">
+              <h3 className="text-gray-500 dark:text-gray-400 text-sm mb-2 print-text">{t('aiInsights')}</h3>
+              <p className="text-base font-medium text-pink-600 dark:text-pink-400">{analysis.insights}</p>
             </div>
           </div>
 
           {/* Column List */}
-          <div className="bg-white/5 border border-white/10 rounded-2xl p-6 mb-6 print-card print-border">
-            <h2 className="text-xl font-bold mb-4 print-text">Detected Columns</h2>
+          <div className="bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-2xl p-6 mb-6 shadow-sm dark:shadow-none print-card print-border">
+            <h2 className="text-xl font-bold mb-4 print-text text-slate-900 dark:text-white">{t('detectedColumns')}</h2>
             <div className="flex flex-wrap gap-2">
               {analysis.summary.columns.map((col, i) => (
-                <span key={i} className="px-3 py-1 bg-indigo-500/20 text-indigo-300 rounded-full text-sm font-medium">
+                <span key={i} className="px-3 py-1 bg-indigo-100 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 rounded-full text-sm font-medium border border-indigo-200 dark:border-transparent">
                   {col}
                 </span>
               ))}
@@ -114,8 +117,8 @@ export default function AnalyticsDashboard() {
 
           {/* Chart */}
           {analysis.chart_data && (
-            <div className="bg-white/5 border border-white/10 rounded-2xl p-6 mb-6 h-[480px] shadow-2xl print-card print-border">
-              <h2 className="text-xl font-bold mb-4 print-text">Auto-Generated Chart</h2>
+            <div className="bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-2xl p-6 mb-6 h-[480px] shadow-sm dark:shadow-2xl print-card print-border">
+              <h2 className="text-xl font-bold mb-4 print-text text-slate-900 dark:text-white">{t('autoGeneratedChart')}</h2>
               <div className="h-full w-full pb-16">
                 <Bar
                   data={analysis.chart_data}
@@ -123,17 +126,17 @@ export default function AnalyticsDashboard() {
                     responsive: true,
                     maintainAspectRatio: false,
                     plugins: {
-                      legend: { labels: { color: '#e2e8f0' } },
+                      legend: { labels: { color: isDark ? '#e2e8f0' : '#475569' } },
                       title: { display: false },
                     },
                     scales: {
                       y: {
-                        ticks: { color: '#94a3b8' },
-                        grid: { color: 'rgba(255,255,255,0.07)' },
+                        ticks: { color: isDark ? '#94a3b8' : '#64748b' },
+                        grid: { color: isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.05)' },
                       },
                       x: {
-                        ticks: { color: '#94a3b8' },
-                        grid: { color: 'rgba(255,255,255,0.07)' },
+                        ticks: { color: isDark ? '#94a3b8' : '#64748b' },
+                        grid: { color: isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.05)' },
                       },
                     },
                   }}
