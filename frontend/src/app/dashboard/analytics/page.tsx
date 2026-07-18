@@ -41,7 +41,7 @@ export default function AnalyticsDashboard() {
 
   const getApiUrl = () => {
     const custom = typeof window !== 'undefined' ? localStorage.getItem('custom_api_url') || '' : '';
-    return custom.trim() || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:9999';
+    return custom.trim() || process.env.NEXT_PUBLIC_API_URL || '/api/backend';
   };
 
   const handleExport = async (format: 'json' | 'csv' | 'xlsx' | 'pdf') => {

@@ -1,0 +1,29 @@
+{
+  "name": "RAGify - Full Stack",
+  "image": "mcr.microsoft.com/devcontainers/universal:2",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+  "forwardPorts": [3000, 9999],
+  "portsAttributes": {
+    "3000": {
+      "label": "Frontend (RAGify UI)",
+      "onAutoForward": "openBrowser",
+      "visibility": "public"
+    },
+    "9999": {
+      "label": "Backend (FastAPI)",
+      "onAutoForward": "silent",
+      "visibility": "public"
+    }
+  },
+  "postStartCommand": "docker compose up --build -d",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "bradlc.vscode-tailwindcss"
+      ]
+    }
+  }
+}

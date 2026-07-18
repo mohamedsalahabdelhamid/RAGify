@@ -32,7 +32,7 @@ export default function Dashboard() {
   // ── Helpers ───────────────────────────────────────────────────────────────
 
   const getApiUrl = () =>
-    customApiUrl.trim() || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:9999';
+    customApiUrl.trim() || process.env.NEXT_PUBLIC_API_URL || '/api/backend';
 
   const getAxiosConfig = () => ({
     headers: { "Bypass-Tunnel-Reminder": "true" }
