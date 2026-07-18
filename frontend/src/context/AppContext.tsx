@@ -95,28 +95,25 @@ const translations = {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setTheme] = useState<Theme>(() => {
-    if (typeof window !== 'undefined') {
-      const savedTheme = localStorage.getItem('theme') as Theme | null;
-      if (savedTheme) return savedTheme;
-      if (window.matchMedia('(prefers-color-scheme: light)').matches) return 'light';
-    }
-    return 'dark';
-  });
-
-  const [language, setLanguage] = useState<Language>(() => {
-    if (typeof window !== 'undefined') {
-      const savedLang = localStorage.getItem('language') as Language | null;
-      if (savedLang) return savedLang;
-    }
-    return 'en';
-  });
+  const [theme, setTheme] = useState<Theme>('dark');
+  const [language, setLanguage] = useState<Language>('en');
 
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
     // eslint-disable-next-line
     setMounted(true);
+    const savedTheme = localStorage.getItem('theme') as Theme | null;
+    if (savedTheme) {
+      setTheme(savedTheme);
+    } else if (window.matchMedia('(prefers-color-scheme: light)').matches) {
+      setTheme('light');
+    }
+
+    const savedLang = localStorage.getItem('language') as Language | null;
+    if (savedLang) {
+      setLanguage(savedLang);
+    }
   }, []);
 
   useEffect(() => {
@@ -147,10 +144,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const t = (key: string): string => {
     return (translations[language] as Record<string, string>)[key] || key;
   };
-
-  if (!mounted) {
-    return <div style={{ visibility: 'hidden' }}>{children}</div>;
-  }
 
   return (
     <AppContext.Provider value={{ theme, toggleTheme, language, toggleLanguage, t }}>
