@@ -108,7 +108,7 @@ export default function Dashboard() {
       const formData = new FormData();
       formData.append('message', userMsg);
       const res = await axios.post(`${getApiUrl()}/chat`, formData, getAxiosConfig());
-      setMessages(prev => [...prev, { role: 'system', content: res.data.response }]);
+      setMessages(prev => [...prev, { role: 'system', content: res.data.response, action: res.data.action }]);
     } catch {
       setMessages(prev => [...prev, { role: 'system', content: '❌ Could not connect to the server. Check backend URL settings.' }]);
     }
@@ -279,14 +279,30 @@ export default function Dashboard() {
 
           {/* Messages */}
           <div className="flex-1 overflow-y-auto p-6 space-y-4">
-            {messages.map((m, i) => (
-              <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[80%] rounded-2xl p-4 leading-relaxed text-sm ${
-                  m.role === 'user'
-                    ? 'bg-indigo-600 text-white rounded-br-none'
-                    : 'bg-gray-100 dark:bg-white/10 text-slate-800 dark:text-gray-200 rounded-bl-none'
-                }`}>
-                  {m.content}
+            {messages.map((msg, i) => (
+              <div key={i} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                <div
+                  className={`max-w-[85%] rounded-2xl p-4 shadow-sm ${
+                    msg.role === 'user'
+                      ? 'bg-indigo-600 text-white rounded-br-none'
+                      : 'bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 text-slate-800 dark:text-gray-200 rounded-bl-none'
+                  }`}
+                  style={{ direction: msg.content.match(/[\u0600-\u06FF]/) ? 'rtl' : 'ltr' }}
+                >
+                  <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                  
+                  {(msg as any).action === 'GENERATE_DASHBOARD' && (
+                    <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+                      <Link 
+                        href="/dashboard/analytics" 
+                        target="_blank"
+                        className="inline-flex items-center gap-2 bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-2 px-4 rounded-xl transition-colors shadow-md"
+                      >
+                        <BarChart3 className="w-5 h-5" />
+                        Open Executive Dashboard
+                      </Link>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
