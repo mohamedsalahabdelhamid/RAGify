@@ -126,8 +126,7 @@ async def upload_file(
 
     Supports multiple files — each upload **merges** into the existing knowledge base.
     """
-    if not _verify_api_key(x_api_key):
-        raise HTTPException(status_code=401, detail="Invalid or missing API key.")
+    # No API key check for demo purposes
 
     filename = file.filename or "unknown"
     ext = os.path.splitext(filename)[1].lower()
@@ -206,8 +205,7 @@ async def chat(
 
     Works across ALL uploaded documents simultaneously — no need to specify which file.
     """
-    if not _verify_api_key(x_api_key):
-        raise HTTPException(status_code=401, detail="Invalid or missing API key.")
+    # No API key check for demo purposes
 
     if not message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty.")
@@ -280,8 +278,7 @@ async def export_data(
 
     Pass the analysis JSON from the frontend as the `data` field.
     """
-    if not _verify_api_key(x_api_key):
-        raise HTTPException(status_code=401, detail="Invalid or missing API key.")
+    # No API key check for demo purposes
 
     try:
         parsed = json.loads(data)
@@ -443,8 +440,7 @@ def reset_knowledge_base(x_api_key: str | None = Header(default=None)):
     Wipe the entire FAISS vector database.
     All uploaded documents will be forgotten. Use with caution.
     """
-    if not _verify_api_key(x_api_key):
-        raise HTTPException(status_code=401, detail="Invalid or missing API key.")
+    # No API key check for demo purposes
 
     import shutil
     db_path = os.path.join(os.path.dirname(__file__), "services", "..", "vectorstore", "db_faiss")
