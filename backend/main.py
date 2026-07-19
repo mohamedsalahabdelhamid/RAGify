@@ -22,11 +22,14 @@ from services.data_analyzer import data_analyzer
 app = FastAPI(
     title="RAGify API",
     description="AI-powered document analysis and retrieval system. Upload files, ask questions, get insights.",
-    version="3.0.0",
+    version="4.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
 
+# ─── CORS ─────────────────────────────────────────────────────────────────────
+# Allow all origins for Codespaces/Docker compatibility.
+# For production, replace "*" with your specific frontend domain.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -36,14 +39,46 @@ app.add_middleware(
 )
 
 EXCEL_EXTENSIONS = {".xlsx", ".xls", ".csv", ".json"}
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB hard limit
 
-# ─── In-memory stores ─────────────────────────────────────────────────────────
+# ─── File Registry — persisted to disk ───────────────────────────────────────
+# Survives backend restarts unlike a plain in-memory dict.
 _api_keys: set[str] = set()
-# Track uploaded files: {filename: {"type": "document"|"excel", "chunks": int}}
-_uploaded_files: dict = {}
 
+REGISTRY_PATH = os.path.join(os.path.dirname(__file__), "data", "files_registry.json")
+
+
+def _load_registry() -> dict:
+    """Load the file registry from disk on startup."""
+    os.makedirs(os.path.dirname(REGISTRY_PATH), exist_ok=True)
+    if os.path.exists(REGISTRY_PATH):
+        try:
+            with open(REGISTRY_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as exc:
+            logger.warning(f"Could not read registry: {exc}")
+    return {}
+
+
+def _save_registry(registry: dict):
+    """Persist the file registry to disk."""
+    os.makedirs(os.path.dirname(REGISTRY_PATH), exist_ok=True)
+    try:
+        with open(REGISTRY_PATH, "w", encoding="utf-8") as f:
+            json.dump(registry, f, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        logger.error(f"Could not save registry: {exc}")
+
+
+# Load registry on startup
+_uploaded_files: dict = _load_registry()
+logger.info(f"Loaded file registry: {len(_uploaded_files)} file(s) found.")
+
+
+# ─── API Key helpers ──────────────────────────────────────────────────────────
 
 def _verify_api_key(x_api_key: str | None) -> bool:
+    """If no keys have been generated yet, allow all traffic (open mode)."""
     if not _api_keys:
         return True
     return x_api_key in _api_keys
@@ -58,7 +93,7 @@ def health_check():
     return {
         "status": "healthy",
         "app": "RAGify API",
-        "version": "3.0.0",
+        "version": "4.0.0",
         "loaded_models": llm_manager.available_models,
         "indexed_files": len(_uploaded_files),
         "docs": "/docs",
@@ -105,11 +140,28 @@ def list_files():
 
 @app.delete("/files/{filename}", tags=["Documents"])
 def delete_file(filename: str):
-    """Remove a specific file from the registry (note: does not remove from FAISS — use /reset for full wipe)."""
-    if filename in _uploaded_files:
-        del _uploaded_files[filename]
-        return {"message": f"✅ '{filename}' removed from registry."}
-    raise HTTPException(status_code=404, detail=f"File '{filename}' not found in registry.")
+    """
+    Remove a specific file from the registry AND from the FAISS vector database.
+    After this call the AI will no longer have access to that file's content.
+    """
+    if filename not in _uploaded_files:
+        raise HTTPException(status_code=404, detail=f"File '{filename}' not found in registry.")
+
+    # Remove from FAISS (surgical delete by source metadata)
+    deleted_from_faiss = vector_db.delete_by_filename(filename)
+    if deleted_from_faiss:
+        logger.info(f"'{filename}' vectors removed from FAISS.")
+    else:
+        logger.warning(f"'{filename}' had no vectors in FAISS (may have already been removed).")
+
+    # Remove from registry and persist
+    del _uploaded_files[filename]
+    _save_registry(_uploaded_files)
+
+    return {
+        "message": f"✅ '{filename}' removed from registry and vector database.",
+        "faiss_deleted": deleted_from_faiss,
+    }
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -125,10 +177,22 @@ async def upload_file(
     Upload and process any supported file.
     - PDF, DOCX, TXT, PPTX, Images → RAG pipeline (indexed in FAISS for Q&A)
     - XLSX, XLS, CSV → Dual pipeline: analyzed with Pandas AND indexed in FAISS for Q&A
+    
+    Max file size: 50 MB
     """
+    if not _verify_api_key(x_api_key):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key.")
+
     filename = file.filename or "unknown"
     ext = os.path.splitext(filename)[1].lower()
     contents = await file.read()
+
+    # ── File size guard ───────────────────────────────────────────────────────
+    if len(contents) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large ({len(contents) / 1024 / 1024:.1f} MB). Maximum allowed size is 50 MB."
+        )
 
     # ── Excel / CSV / JSON files → DUAL pipeline (analytics + RAG) ───────────
     if ext in EXCEL_EXTENSIONS:
@@ -139,15 +203,21 @@ async def upload_file(
             raise HTTPException(status_code=500, detail=f"Analysis error: {exc}")
 
         # 2. Also index the data into FAISS for Q&A
+        chunks = []
         try:
             chunks = await document_processor.process_excel_for_rag(contents, filename)
             if chunks:
                 vector_db.add_chunks(chunks, filename=filename)
-                logger.info(f"Excel '{filename}' also indexed in FAISS with {len(chunks)} chunks.")
+                logger.info(f"Excel '{filename}' indexed in FAISS with {len(chunks)} chunks.")
         except Exception as exc:
             logger.warning(f"Could not index Excel in FAISS: {exc}")
 
-        _uploaded_files[filename] = {"type": "excel", "chunks": len(analysis.get("charts", []))}
+        _uploaded_files[filename] = {
+            "type": "excel",
+            "chunks": len(chunks),
+            "charts": len(analysis.get("charts", [])),
+        }
+        _save_registry(_uploaded_files)
 
         return {
             "filename": filename,
@@ -168,6 +238,7 @@ async def upload_file(
 
         vector_db.add_chunks(chunks, filename=filename)
         _uploaded_files[filename] = {"type": "document", "chunks": len(chunks)}
+        _save_registry(_uploaded_files)
 
         # Generate a smart summary after indexing
         prompt = (
@@ -208,6 +279,9 @@ async def chat(
     RAG Chat endpoint with conversation memory.
     Accepts `history` as a JSON array of [{role, content}] for context continuity.
     """
+    if not _verify_api_key(x_api_key):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key.")
+
     if not message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty.")
 
@@ -255,7 +329,7 @@ async def chat(
             "3. RESPOND IN THE EXACT SAME LANGUAGE AS THE USER'S CURRENT QUESTION.\n"
             "4. Use the CONVERSATION HISTORY to understand follow-up questions and maintain context.\n"
             "5. AGENTIC ACTIONS: If the user asks to 'create a dashboard', 'visualize data', 'show chart', or 'generate a report', include the token `[ACTION: GENERATE_DASHBOARD]` in your response.\n"
-            "6. Format answers with clear structure (bullet points, sections) when appropriate.\n\n"
+            "6. Format answers with clear structure using **markdown** (bullet points, **bold**, headers) when appropriate.\n\n"
             f"{history_str}"
             f"CONTEXT FROM DOCUMENTS:\n{context}\n\n"
             f"USER QUESTION: {message}\n\n"
@@ -271,7 +345,8 @@ async def chat(
             "You are a professional Enterprise AI Assistant.\n"
             f"{no_context_note} Answer based on general knowledge if appropriate.\n"
             "Politely remind the user they can upload files (PDF, Excel, Word, Images, CSV) for precise analysis.\n"
-            "RESPOND IN THE EXACT SAME LANGUAGE AS THE USER'S QUESTION.\n\n"
+            "RESPOND IN THE EXACT SAME LANGUAGE AS THE USER'S QUESTION.\n"
+            "Use **markdown formatting** where appropriate.\n\n"
             f"{history_str}"
             f"USER QUESTION: {message}\n\n"
             "ANSWER:"
@@ -443,10 +518,18 @@ async def export_data(
 def reset_knowledge_base(x_api_key: str | None = Header(default=None)):
     """Wipe the entire FAISS vector database and file registry."""
     import shutil
+
     db_path = os.path.join(os.path.dirname(__file__), "vectorstore", "db_faiss")
     if os.path.exists(db_path):
         shutil.rmtree(db_path)
+
+    # Clear in-memory cache in vector_db
+    vector_db.reset()
+
+    # Clear and persist the registry
     _uploaded_files.clear()
+    _save_registry(_uploaded_files)
+
     logger.info("FAISS vector database and file registry wiped.")
     return {"message": "✅ Knowledge base reset. All documents have been removed."}
 

@@ -55,14 +55,16 @@ class DataAnalyzer:
             cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
             
             # Clean up object columns that might be dates
-            for col in cat_cols:
+            # NOTE: iterate over a copy to avoid modifying the list mid-loop
+            cols_to_promote = []
+            for col in cat_cols[:]:
                 try:
-                    df[col] = pd.to_datetime(df[col])
-                    cat_cols.remove(col)
-                    if 'date_columns' not in locals(): date_cols = []
-                    date_cols.append(col)
+                    converted = pd.to_datetime(df[col], infer_datetime_format=True)
+                    df[col] = converted
+                    cols_to_promote.append(col)
                 except Exception:
                     pass
+            cat_cols = [c for c in cat_cols if c not in cols_to_promote]
 
             date_cols = df.select_dtypes(include=["datetime"]).columns.tolist()
 

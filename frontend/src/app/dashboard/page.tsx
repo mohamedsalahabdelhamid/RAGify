@@ -1,10 +1,12 @@
 "use client";
 import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   UploadCloud, MessageSquare, BarChart3, Send, Settings, Check,
   Sun, Moon, Languages, Home, Key, Copy, Trash2, RefreshCw,
-  FileText, FileSpreadsheet, Image, X, FolderOpen, ChevronRight
+  FileText, FileSpreadsheet, Image, X, FolderOpen, ChevronRight, Plus
 } from 'lucide-react';
 import Link from 'next/link';
 import { useAppContext } from '@/context/AppContext';
@@ -19,14 +21,18 @@ interface Message {
 interface IndexedFile {
   type: 'document' | 'excel';
   chunks: number;
+  charts?: number;
 }
 
 export default function Dashboard() {
   const { t, theme, toggleTheme, language, toggleLanguage } = useAppContext();
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const [file, setFile] = useState<File | null>(null);
+  // Multi-file support
+  const [files, setFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
+  const [uploadingFile, setUploadingFile] = useState<string | null>(null);
 
   // Messages with localStorage persistence
   const [messages, setMessages] = useState<Message[]>(() => {
@@ -82,7 +88,6 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      // Keep only last 50 messages to avoid localStorage overflow
       const toSave = messages.slice(-50);
       localStorage.setItem('ragify_chat_history', JSON.stringify(toSave));
     }
@@ -95,7 +100,7 @@ export default function Dashboard() {
       const res = await axios.get(`${getApiUrl()}/files`, getAxiosConfig());
       setIndexedFiles(res.data.files || {});
       const hasExcel = Object.values(res.data.files || {}).some(
-        (f: any) => f.type === 'excel'
+        (f: unknown) => (f as IndexedFile).type === 'excel'
       );
       setHasExcelData(hasExcel);
     } catch {
@@ -105,7 +110,6 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchFiles();
-    // Also restore excel data flag from localStorage
     if (typeof window !== 'undefined' && localStorage.getItem('excel_analysis')) {
       setHasExcelData(true);
     }
@@ -146,36 +150,68 @@ export default function Dashboard() {
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
+    const dropped = Array.from(e.dataTransfer.files);
+    setFiles(prev => {
+      const names = prev.map(f => f.name);
+      return [...prev, ...dropped.filter(f => !names.includes(f.name))];
+    });
   };
 
-  // ── File upload ───────────────────────────────────────────────────────────
+  const addFiles = (newFiles: FileList | null) => {
+    if (!newFiles) return;
+    const arr = Array.from(newFiles);
+    setFiles(prev => {
+      const names = prev.map(f => f.name);
+      return [...prev, ...arr.filter(f => !names.includes(f.name))];
+    });
+  };
+
+  const removeFile = (name: string) => {
+    setFiles(prev => prev.filter(f => f.name !== name));
+  };
+
+  // ── File upload (multi-file with progress) ────────────────────────────────
 
   const handleUpload = async () => {
-    if (!file) return;
+    if (!files.length) return;
     setLoading(true);
-    const formData = new FormData();
-    formData.append('file', file);
-    try {
-      const res = await axios.post(`${getApiUrl()}/upload`, formData, getAxiosConfig());
-      setMessages(prev => [...prev, {
-        role: 'system',
-        content: res.data.message || 'File uploaded successfully.',
-        timestamp: Date.now()
-      }]);
-      if (res.data.type === 'excel') {
-        setHasExcelData(true);
-        localStorage.setItem('excel_analysis', JSON.stringify(res.data.analysis));
+
+    for (const file of files) {
+      setUploadingFile(file.name);
+      setUploadProgress(prev => ({ ...prev, [file.name]: 0 }));
+      const formData = new FormData();
+      formData.append('file', file);
+
+      try {
+        const res = await axios.post(`${getApiUrl()}/upload`, formData, {
+          ...getAxiosConfig(),
+          onUploadProgress: (e) => {
+            const pct = e.total ? Math.round((e.loaded * 100) / e.total) : 0;
+            setUploadProgress(prev => ({ ...prev, [file.name]: pct }));
+          },
+        });
+        setMessages(prev => [...prev, {
+          role: 'system',
+          content: res.data.message || `✅ '${file.name}' uploaded successfully.`,
+          timestamp: Date.now()
+        }]);
+        if (res.data.type === 'excel') {
+          setHasExcelData(true);
+          localStorage.setItem('excel_analysis', JSON.stringify(res.data.analysis));
+        }
+      } catch {
+        setMessages(prev => [...prev, {
+          role: 'system',
+          content: `❌ Error uploading '${file.name}'. Make sure the backend is running.`,
+          timestamp: Date.now()
+        }]);
       }
-      setFile(null);
-      await fetchFiles();
-    } catch {
-      setMessages(prev => [...prev, {
-        role: 'system',
-        content: '❌ Error uploading file. Make sure the backend is running.',
-        timestamp: Date.now()
-      }]);
     }
+
+    setFiles([]);
+    setUploadProgress({});
+    setUploadingFile(null);
+    await fetchFiles();
     setLoading(false);
   };
 
@@ -185,6 +221,11 @@ export default function Dashboard() {
     try {
       await axios.delete(`${getApiUrl()}/files/${encodeURIComponent(filename)}`, getAxiosConfig());
       await fetchFiles();
+      setMessages(prev => [...prev, {
+        role: 'system',
+        content: `🗑️ '${filename}' removed from the knowledge base.`,
+        timestamp: Date.now()
+      }]);
     } catch {
       // ignore
     }
@@ -193,7 +234,9 @@ export default function Dashboard() {
   // ── Reset knowledge base ──────────────────────────────────────────────────
 
   const handleReset = async () => {
-    if (!confirm('Are you sure? This will delete all uploaded documents from memory.')) return;
+    if (!confirm(language === 'ar'
+      ? 'هل أنت متأكد؟ سيتم حذف جميع المستندات المحملة من الذاكرة.'
+      : 'Are you sure? This will delete all uploaded documents from memory.')) return;
     try {
       await axios.delete(`${getApiUrl()}/reset`, getAxiosConfig());
       setMessages([{
@@ -226,10 +269,9 @@ export default function Dashboard() {
     setLoading(true);
 
     try {
-      // Build history for the API (exclude the welcome message + last user msg)
       const historyForApi = updatedMessages
-        .slice(1, -1) // skip first welcome and last (just-added) user msg
-        .filter(m => m.content && !m.content.startsWith('❌') && !m.content.startsWith('✅'))
+        .slice(1, -1)
+        .filter(m => m.content && m.role)
         .slice(-16)
         .map(m => ({ role: m.role, content: m.content }));
 
@@ -259,35 +301,39 @@ export default function Dashboard() {
   const fileCount = Object.keys(indexedFiles).length;
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-slate-950 text-slate-900 dark:text-white p-4 md:p-6 transition-colors duration-300">
+    <div className="min-h-screen bg-gray-50 dark:bg-slate-950 text-slate-900 dark:text-white transition-colors duration-300">
 
       {/* Header */}
-      <div className="max-w-7xl mx-auto flex justify-between items-center mb-5">
-        <Link href="/" className="flex items-center gap-2 text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 to-purple-600 hover:opacity-80 transition-opacity">
-          <Home className="w-6 h-6 text-indigo-500" />
-          {t('appName')}
-        </Link>
-        <div className="flex gap-2">
-          <button onClick={toggleLanguage} className="p-2 bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 hover:bg-gray-100 dark:hover:bg-white/10 rounded-lg transition-colors text-gray-600 dark:text-gray-400 flex items-center gap-1.5 text-sm font-medium px-3">
-            <Languages className="w-4 h-4" />
-            {language === 'en' ? 'عربي' : 'EN'}
-          </button>
-          <button onClick={toggleTheme} className="p-2 bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 hover:bg-gray-100 dark:hover:bg-white/10 rounded-lg transition-colors text-gray-600 dark:text-gray-400">
-            {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
-          </button>
+      <div className="border-b border-gray-200 dark:border-white/10 bg-white dark:bg-slate-900/80 backdrop-blur-sm sticky top-0 z-30">
+        <div className="max-w-7xl mx-auto px-4 md:px-6 h-14 flex justify-between items-center">
+          <Link href="/" className="flex items-center gap-2 text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 to-purple-600 hover:opacity-80 transition-opacity">
+            <Home className="w-5 h-5 text-indigo-500" />
+            {t('appName')}
+          </Link>
+          <div className="flex gap-2">
+            <button onClick={toggleLanguage} className="p-2 bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 hover:bg-gray-100 dark:hover:bg-white/10 rounded-lg transition-colors text-gray-600 dark:text-gray-400 flex items-center gap-1.5 text-sm font-medium px-3">
+              <Languages className="w-4 h-4" />
+              {language === 'en' ? 'عربي' : 'EN'}
+            </button>
+            <button onClick={toggleTheme} className="p-2 bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 hover:bg-gray-100 dark:hover:bg-white/10 rounded-lg transition-colors text-gray-600 dark:text-gray-400">
+              {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-5" style={{ height: 'calc(100vh - 100px)' }}>
+      <div className="max-w-7xl mx-auto p-4 md:p-6 flex flex-col md:flex-row gap-5" style={{ height: 'calc(100vh - 56px)' }}>
 
         {/* ── Sidebar ── */}
-        <div className="bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-2xl p-5 flex flex-col gap-4 overflow-y-auto shadow-sm">
+        <div className="w-full md:w-80 flex-shrink-0 bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-2xl p-5 flex flex-col gap-4 overflow-y-auto shadow-sm">
 
           {/* Upload Area */}
           <div>
             <h2 className="text-base font-bold flex items-center gap-2 mb-3">
               <UploadCloud className="text-indigo-500 w-5 h-5" /> {t('uploadFiles')}
             </h2>
+
+            {/* Drop Zone */}
             <div
               className={`border-2 border-dashed rounded-xl p-5 text-center transition-colors cursor-pointer ${isDragging ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-500/10' : 'border-gray-300 dark:border-white/20 hover:border-indigo-400/60'}`}
               onDragOver={handleDragOver}
@@ -299,32 +345,63 @@ export default function Dashboard() {
                 type="file"
                 className="hidden"
                 id="fileInput"
+                multiple
                 accept=".pdf,.xlsx,.xls,.csv,.docx,.txt,.pptx,.png,.jpg,.jpeg,.json"
-                onChange={(e) => e.target.files && setFile(e.target.files[0])}
+                onChange={(e) => addFiles(e.target.files)}
               />
-              {file ? (
-                <div className="flex flex-col items-center gap-2">
-                  <div className="w-10 h-10 bg-indigo-100 dark:bg-indigo-500/20 rounded-full flex items-center justify-center">
-                    <FileText className="w-5 h-5 text-indigo-600" />
-                  </div>
-                  <p className="text-sm font-semibold text-indigo-700 dark:text-indigo-400 break-all">{file.name}</p>
-                  <p className="text-xs text-gray-400">{(file.size / 1024).toFixed(1)} KB</p>
-                </div>
-              ) : (
-                <div className="flex flex-col items-center gap-2 py-2">
-                  <UploadCloud className="w-8 h-8 text-gray-400" />
-                  <p className="text-sm text-gray-500 dark:text-gray-400 font-medium">Drop file or click to select</p>
-                  <p className="text-xs text-gray-400">PDF · DOCX · PPTX · TXT · Excel · CSV · Images</p>
-                </div>
-              )}
+              <div className="flex flex-col items-center gap-2 py-2">
+                <UploadCloud className="w-8 h-8 text-gray-400" />
+                <p className="text-sm text-gray-500 dark:text-gray-400 font-medium">{t('dropFileOrClick')}</p>
+                <p className="text-xs text-gray-400">PDF · DOCX · PPTX · TXT · Excel · CSV · Images</p>
+                <p className="text-xs text-indigo-400 font-medium flex items-center gap-1">
+                  <Plus className="w-3 h-3" /> {t('selectMultiple')}
+                </p>
+              </div>
             </div>
+
+            {/* Selected Files Queue */}
+            {files.length > 0 && (
+              <div className="mt-3 space-y-2">
+                {files.map(file => (
+                  <div key={file.name} className="flex items-center gap-2 bg-indigo-50 dark:bg-indigo-500/10 border border-indigo-200 dark:border-indigo-500/20 rounded-lg px-3 py-2">
+                    {getFileIcon(file.name)}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium text-indigo-700 dark:text-indigo-300 truncate">{file.name}</p>
+                      {uploadProgress[file.name] !== undefined && (
+                        <div className="mt-1 h-1 bg-indigo-100 dark:bg-indigo-900 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-indigo-500 transition-all duration-300"
+                            style={{ width: `${uploadProgress[file.name]}%` }}
+                          />
+                        </div>
+                      )}
+                      {uploadingFile === file.name && (
+                        <p className="text-[10px] text-indigo-400 mt-0.5">
+                          {uploadProgress[file.name] ?? 0}%
+                        </p>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => removeFile(file.name)}
+                      className="text-red-400 hover:text-red-600 flex-shrink-0"
+                      title={t('removeFile')}
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
             <button
               onClick={handleUpload}
-              disabled={!file || loading}
+              disabled={!files.length || loading}
               className="mt-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-bold py-2.5 px-4 rounded-xl transition-colors w-full flex items-center justify-center gap-2 text-sm"
             >
-              {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />}
-              {loading ? t('processing') : t('processFile')}
+              {loading && uploadingFile
+                ? <><RefreshCw className="w-4 h-4 animate-spin" /> {t('uploading')}</>
+                : <><UploadCloud className="w-4 h-4" /> {files.length > 1 ? t('uploadAll') : t('processFile')}</>
+              }
             </button>
           </div>
 
@@ -336,25 +413,28 @@ export default function Dashboard() {
             >
               <span className="flex items-center gap-2">
                 <FolderOpen className="w-4 h-4" />
-                Indexed Files ({fileCount})
+                {fileCount} {t('filesIndexed')}
               </span>
               <ChevronRight className={`w-4 h-4 transition-transform ${showFiles ? 'rotate-90' : ''}`} />
             </button>
             {showFiles && (
               <div className="mt-3 space-y-2">
                 {fileCount === 0 ? (
-                  <p className="text-xs text-gray-400 text-center py-2">No files indexed yet</p>
+                  <p className="text-xs text-gray-400 text-center py-2">{t('noFilesYet')}</p>
                 ) : (
                   Object.entries(indexedFiles).map(([name, info]) => (
                     <div key={name} className="flex items-center justify-between gap-2 bg-gray-50 dark:bg-white/5 rounded-lg px-3 py-2">
                       <div className="flex items-center gap-2 overflow-hidden">
                         {getFileIcon(name)}
-                        <span className="text-xs text-gray-700 dark:text-gray-300 truncate">{name}</span>
+                        <div className="min-w-0">
+                          <span className="text-xs text-gray-700 dark:text-gray-300 truncate block">{name}</span>
+                          <span className="text-[10px] text-gray-400">{info.chunks} chunks</span>
+                        </div>
                       </div>
                       <button
                         onClick={() => handleDeleteFile(name)}
                         className="text-red-400 hover:text-red-600 flex-shrink-0"
-                        title="Remove from registry"
+                        title={t('removeFile')}
                       >
                         <X className="w-3.5 h-3.5" />
                       </button>
@@ -384,7 +464,7 @@ export default function Dashboard() {
             <Key className="w-4 h-4" /> {t('generateApiKey')}
           </button>
 
-          {/* API Key Panel (Inline) */}
+          {/* API Key Panel */}
           {showApiKey && (
             <div className="bg-gray-50 dark:bg-black/30 border border-gray-200 dark:border-white/10 rounded-xl p-4 text-sm">
               <h3 className="font-bold mb-1 flex items-center gap-2"><Key className="w-4 h-4 text-indigo-500" /> {t('apiKeyTitle')}</h3>
@@ -395,7 +475,7 @@ export default function Dashboard() {
                   <div className="flex gap-2">
                     <button onClick={handleCopyKey} className="flex-1 flex items-center justify-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white py-1.5 rounded-lg text-xs font-semibold">
                       {keyCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                      {keyCopied ? 'Copied!' : 'Copy Key'}
+                      {keyCopied ? t('copied') : t('copyKey')}
                     </button>
                     <button onClick={handleGenerateKey} className="p-1.5 border border-gray-200 dark:border-white/10 rounded-lg hover:bg-gray-100 dark:hover:bg-white/10">
                       <RefreshCw className="w-3.5 h-3.5" />
@@ -405,7 +485,7 @@ export default function Dashboard() {
               ) : (
                 <button onClick={handleGenerateKey} disabled={keyLoading} className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold py-2 rounded-lg flex items-center justify-center gap-2 text-xs">
                   {keyLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Key className="w-3.5 h-3.5" />}
-                  Generate Key
+                  {t('generateKey')}
                 </button>
               )}
             </div>
@@ -421,7 +501,7 @@ export default function Dashboard() {
         </div>
 
         {/* ── Chat Area ── */}
-        <div className="md:col-span-2 bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-2xl flex flex-col overflow-hidden shadow-xl dark:shadow-indigo-900/20">
+        <div className="flex-1 min-w-0 bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-2xl flex flex-col overflow-hidden shadow-xl dark:shadow-indigo-900/20">
 
           {/* Chat Header */}
           <div className="p-4 border-b border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-black/20 flex items-center justify-between flex-shrink-0">
@@ -430,7 +510,7 @@ export default function Dashboard() {
               <h2 className="text-base font-bold">{t('aiAssistant')}</h2>
               {fileCount > 0 && (
                 <span className="text-xs bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 px-2 py-0.5 rounded-full font-medium">
-                  {fileCount} file{fileCount > 1 ? 's' : ''} indexed
+                  {fileCount} {t('filesIndexed')}
                 </span>
               )}
             </div>
@@ -442,9 +522,9 @@ export default function Dashboard() {
                     localStorage.removeItem('ragify_chat_history');
                   }}
                   className="text-xs text-gray-400 hover:text-red-400 transition-colors flex items-center gap-1"
-                  title="Clear chat"
+                  title={t('clearChat')}
                 >
-                  <Trash2 className="w-3.5 h-3.5" /> Clear chat
+                  <Trash2 className="w-3.5 h-3.5" /> {t('clearChat')}
                 </button>
               )}
               <button
@@ -466,7 +546,7 @@ export default function Dashboard() {
                   type="text"
                   value={customApiUrl}
                   onChange={e => setCustomApiUrl(e.target.value)}
-                  placeholder="https://ragify-backend.loca.lt"
+                  placeholder="https://your-backend-url.com"
                   className="flex-1 bg-white dark:bg-black/50 border border-gray-300 dark:border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 text-slate-900 dark:text-white"
                 />
                 <button onClick={saveApiUrl} className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-lg"><Check className="w-4 h-4" /></button>
@@ -485,9 +565,20 @@ export default function Dashboard() {
                       ? 'bg-indigo-600 text-white rounded-br-none'
                       : 'bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/10 text-slate-800 dark:text-gray-200 rounded-bl-none'
                   }`}
-                  style={{ direction: /[\u0600-\u06FF]/.test(msg.content) ? 'rtl' : 'ltr' }}
+                  dir={/[\u0600-\u06FF]/.test(msg.content) ? 'rtl' : 'ltr'}
                 >
-                  <p className="whitespace-pre-wrap leading-relaxed text-sm">{msg.content}</p>
+                  {msg.role === 'user' ? (
+                    <p className="whitespace-pre-wrap leading-relaxed text-sm">{msg.content}</p>
+                  ) : (
+                    <div className="prose prose-sm dark:prose-invert max-w-none leading-relaxed
+                      prose-p:my-1 prose-li:my-0.5 prose-headings:my-2
+                      prose-strong:text-indigo-700 dark:prose-strong:text-indigo-300
+                      prose-code:bg-indigo-50 dark:prose-code:bg-white/10 prose-code:px-1 prose-code:rounded">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {msg.content}
+                      </ReactMarkdown>
+                    </div>
+                  )}
 
                   {msg.action === 'GENERATE_DASHBOARD' && (
                     <div className="mt-3 pt-3 border-t border-white/20 dark:border-gray-600">
@@ -532,6 +623,7 @@ export default function Dashboard() {
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSend()}
                 placeholder={t('askAnything')}
+                dir={language === 'ar' ? 'rtl' : 'ltr'}
                 className="flex-1 bg-white dark:bg-white/5 border border-gray-300 dark:border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:border-indigo-500 transition-colors text-slate-900 dark:text-white placeholder:text-gray-400 text-sm"
               />
               <button

@@ -1,8 +1,12 @@
-FROM python:3.11
+FROM python:3.11-slim
+
+# Install curl for Docker healthcheck
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Create a non-root user
+# Create a non-root user for security
 RUN useradd -m -u 1000 user
 USER user
 ENV HOME=/home/user \
@@ -10,7 +14,7 @@ ENV HOME=/home/user \
 
 WORKDIR $HOME/app
 
-# Copy requirements and install
+# Install Python dependencies (cached layer)
 COPY --chown=user requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
@@ -18,8 +22,11 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copy application code
 COPY --chown=user . .
 
-# Expose port 9999
+# Create required directories for persistent data
+RUN mkdir -p vectorstore data
+
+# Expose FastAPI port
 EXPOSE 9999
 
-# Run FastAPI using uvicorn on port 9999
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "9999"]
+# Run with single worker (FAISS is not thread-safe with multiple workers)
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "9999", "--workers", "1"]
